@@ -229,3 +229,87 @@ graph TD
    - Non-generic Result for operations without return data
    - Consistent HTTP status codes
    - Proper error details in responses
+
+
+
+# Updating Update Method to Use Result Pattern
+
+## Interface Changes
+The interface previously had the update method return a bool and take the domain model as a parameter. We changed it to return Result with no generic type since we don't need to return a value, and changed the parameter to take PollRequest directly:
+
+```csharp
+public interface IPollService
+{
+    Task<IEnumerable<Poll>> GetAllAsync(CancellationToken cancellationToken = default);
+    Task<Result<PollResponse>> GetAsync(int id, CancellationToken cancellationToken = default); 
+    Task<Poll> AddAsync(Poll poll, CancellationToken cancellationToken = default);
+    Task<Result> UpdateAsync(int id, PollRequest request, CancellationToken cancellationToken = default);
+    Task<bool> DeleteAsync(int id, CancellationToken cancellationToken = default);
+    Task<bool> TooglePublishStatusAsync(int id, CancellationToken cancellationToken = default);
+}
+```
+
+## Service Implementation 
+The update method previously returned bool and used GetAsync to find the poll. We modified it to use EF Core FindAsync directly and return Result:
+
+### Previous Version
+```csharp
+public async Task<bool> UpdateAsync(int id, Poll poll, CancellationToken cancellationToken = default)
+{
+    var currentPoll = await GetAsync(id, cancellationToken);
+    if(currentPoll is null)
+        return false;
+    
+    currentPoll.Title = poll.Title;
+    currentPoll.Summary = poll.Summary;
+    currentPoll.StartsAt = poll.StartsAt;
+    currentPoll.EndsAt = poll.EndsAt;
+    
+    await _context.SaveChangesAsync(cancellationToken);
+    return true;
+}
+```
+
+### New Version
+```csharp
+public async Task<Result> UpdateAsync(int id, PollRequest request, CancellationToken cancellationToken = default)
+{
+    var currentPoll = await _context.Polls.FindAsync(id, cancellationToken);
+    if(currentPoll is null)
+        return Result.Failure(PollErrors.PollNotFound);
+        
+    currentPoll.Title = request.Title;
+    currentPoll.Summary = request.Summary;
+    currentPoll.StartsAt = request.StartsAt;
+    currentPoll.EndsAt = request.EndsAt;
+    
+    await _context.SaveChangesAsync(cancellationToken);
+    return Result.Success();
+}
+```
+
+## Controller Updates
+The controller was updated to handle the Result pattern instead of boolean checks:
+
+### Previous Version  
+```csharp
+[HttpPut("{id}")]
+public async Task<IActionResult> Update([FromRoute] int id, [FromBody] PollRequest request, CancellationToken cancellationToken)
+{
+    var isUpdated = await _pollService.UpdateAsync(id, request.Adapt<Poll>(), cancellationToken);
+    
+    if(!isUpdated)
+        return NotFound();
+    return NoContent();
+}
+```
+
+### New Version
+```csharp
+[HttpPut("{id}")]
+public async Task<IActionResult> Update([FromRoute] int id, [FromBody] PollRequest request, CancellationToken cancellationToken)
+{
+    var result = await _pollService.UpdateAsync(id, request, cancellationToken);
+    return result.IsSuccess ? NoContent() : NotFound(result.Error);
+}
+```
