@@ -381,4 +381,114 @@ public async Task<IActionResult> Get([FromRoute] int id, CancellationToken cance
 - Consider adding custom ProblemDetails factory
 - Document API error responses
 
+# Using OneOf Package for Error Handling
 
+Now we can use OneOf package instead of our custom Result class. Let's install it from NuGet package manager.
+
+## AuthService Interface Changes
+In the Auth service interface, instead of returning Result with generic type:
+
+```csharp
+public interface IAuthService 
+{
+    Task<Result<AuthResponse>> GetTokenAsync(string email, string password, CancellationToken cancellationToken = default);
+}
+```
+
+We can use OneOf to specify one type or more to return from this method (AuthResponse or Error):
+
+```csharp
+public interface IAuthService 
+{
+    Task<OneOf<AuthResponse, Error>> GetTokenAsync(string email, string password, CancellationToken cancellationToken = default);
+}
+```
+
+## Service Implementation
+Previous implementation using Result pattern:
+```csharp
+public async Task<Result<AuthResponse>> GetTokenAsync(string email, string password, CancellationToken cancellationToken = default)
+{
+    var user = await _userManager.FindByEmailAsync(email);
+    if(user is null)
+        return Result.Failure<AuthResponse>(UserErrors.InvalidCredentials);
+    
+    var isValidPassword = await _userManager.CheckPasswordAsync(user, password);
+    if(!isValidPassword)
+        return Result.Failure<AuthResponse>(UserErrors.InvalidCredentials);
+    
+    var(token, expiresIn) = _jwtProvider.GenerateToken(user);
+    var refreshToken = GenerateRefreshToken();
+    var refreshTokenExpiration = DateTime.UtcNow.AddDays(_refreshTokenExpiryDays);
+    
+    user.RefreshToken.Add(new RefreshToken
+    {
+        Token = refreshToken,
+        ExpiresOn = refreshTokenExpiration
+    });
+    
+    await _userManager.UpdateAsync(user);
+    
+    var response = new AuthResponse(user.Id, user.Email, user.firstName, user.LastName, token, expiresIn, refreshToken, refreshTokenExpirey);
+    return Result.Success(response);
+}
+```
+
+New implementation using OneOf:
+```csharp
+public async Task<OneOf<AuthResponse, Error>> GetTokenAsync(string email, string password, CancellationToken cancellationToken = default)
+{
+    var user = await _userManager.FindByEmailAsync(email);
+    if(user is null)
+        return UserErrors.InvalidCredentials;
+    
+    var isValidPassword = await _userManager.CheckPasswordAsync(user, password);
+    if(!isValidPassword)
+        return UserErrors.InvalidCredentials;
+    
+    var(token, expiresIn) = _jwtProvider.GenerateToken(user);
+    var refreshToken = GenerateRefreshToken();
+    var refreshTokenExpiration = DateTime.UtcNow.AddDays(_refreshTokenExpiryDays);
+    
+    user.RefreshToken.Add(new RefreshToken
+    {
+        Token = refreshToken,
+        ExpiresOn = refreshTokenExpiration
+    });
+    
+    await _userManager.UpdateAsync(user);
+    
+    return new AuthResponse(user.Id, user.Email, user.firstName, user.LastName, token, expiresIn, refreshToken, refreshTokenExpirey);
+}
+```
+
+## Controller Changes
+We need to modify our controller to use the Match method from OneOf package:
+
+Previous implementation:
+```csharp
+[HttpPost("")]
+public async Task<IActionResult> LoginAsync([FromBody] LoginRequest request, CancellationToken cancellationToken)
+{
+    var authResult = await _authService.GetTokenAsync(request.Email, request.Password, cancellationToken);
+    return authResult.IsSuccess ? Ok(authResult.Value) : BadRequest(authResult.Error);
+}
+```
+
+New implementation using Match:
+```csharp
+[HttpPost("")]
+public async Task<IActionResult> LoginAsync([FromBody] LoginRequest request, CancellationToken cancellationToken)
+{
+    var authResult = await _authService.GetTokenAsync(request.Email, request.Password, cancellationToken);
+    return authResult.Match(
+        authResponse => Ok(authResponse),
+        error => Problem(
+            statusCode: StatusCodes.Status400BadRequest,
+            title: error.Code,
+            detail: error.Description)
+    );
+}
+```
+
+Now everything should work fine and show errors in RFC standard format.
