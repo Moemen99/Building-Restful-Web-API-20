@@ -313,3 +313,72 @@ public async Task<IActionResult> Update([FromRoute] int id, [FromBody] PollReque
     return result.IsSuccess ? NoContent() : NotFound(result.Error);
 }
 ```
+
+
+
+
+# Implementing RFC Standard Error Responses
+
+## RFC Error Response Structure
+The standard error response format follows RFC specifications and includes:
+
+```json
+{
+    "type": "https://tools.ietf.org/html/rfc9110#section-15.5.1",
+    "title": "One or more validation errors occurred",
+    "status": 400,
+    "errors": {
+        "Email": [
+            "The Email field is required.",
+            "'Email' must not be empty."
+        ]
+    },
+    "traceId": "00-b62b1f0cf83986d33435cff664200-1f57d2978f484fd7-00"
+}
+```
+
+## Controller Update
+We modified the Get endpoint to use `Problem()` instead of `NotFound()` for better error responses:
+
+### Previous Version
+```csharp
+[HttpGet("{id}")]
+public async Task<IActionResult> Get([FromRoute] int id, CancellationToken cancellationToken)
+{
+    var result = await _pollService.GetAsync(id, cancellationToken);
+    return result.IsSuccess ? Ok(result.Value) : NotFound(result.Error);
+}
+```
+
+### Updated Version
+```csharp
+[HttpGet("{id}")]
+public async Task<IActionResult> Get([FromRoute] int id, CancellationToken cancellationToken)
+{
+    var result = await _pollService.GetAsync(id, cancellationToken);
+    return result.IsSuccess 
+        ? Ok(result.Value)
+        : Problem(
+            statusCode: StatusCodes.Status404NotFound,
+            title: result.Error.Code,
+            detail: result.Error.Description);
+}
+```
+
+## Benefits of Using Problem Details
+1. Follows RFC standards for error responses
+2. Provides structured error information
+3. Includes:
+   - Error type (RFC reference)
+   - Title
+   - Status code
+   - Detailed error messages
+   - Trace ID for debugging
+
+## Next Steps
+- Apply this pattern to other endpoints
+- Add consistent error types across the application
+- Consider adding custom ProblemDetails factory
+- Document API error responses
+
+
