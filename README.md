@@ -492,3 +492,181 @@ public async Task<IActionResult> LoginAsync([FromBody] LoginRequest request, Can
 ```
 
 Now everything should work fine and show errors in RFC standard format.
+
+
+
+# API Response Standardization Documentation
+
+## Table of Contents
+- [Overview](#overview)
+- [Initial Implementation](#initial-implementation)
+- [Response Analysis](#response-analysis)
+  - [Validation Errors](#validation-errors)
+  - [Business Logic Errors](#business-logic-errors)
+- [Problem Detection](#problem-detection)
+- [Standardization Solution](#standardization-solution)
+- [Implementation Details](#implementation-details)
+
+## Overview
+
+When building REST APIs, maintaining consistent error response formats across different types of errors (validation, business logic, etc.) is crucial for providing a good developer experience. This documentation outlines our journey in standardizing error responses in our authentication API, specifically focusing on aligning FluentValidation errors with our custom error handling.
+
+```mermaid
+graph TD
+    A[Client Request] --> B{Validation Layer}
+    B -->|Valid| C{Business Logic}
+    B -->|Invalid| D[Validation Error Response]
+    C -->|Success| E[Success Response]
+    C -->|Failure| F[Business Error Response]
+    
+    style D fill:#ffcccc
+    style F fill:#ffcccc
+```
+
+## Initial Implementation
+
+Our initial login endpoint implementation used a Result pattern for handling authentication outcomes. Here's how it looked:
+
+```csharp
+[HttpPost("")]
+public async Task<IActionResult> LoginAsync(
+    [FromBody] LoginRequest request,
+    CancellationToken cancellationToken)
+{
+    var authResult = await _authService.GetTokenAsync(
+        request.Email, 
+        request.Password, 
+        cancellationToken);
+ 
+    return authResult.IsSuccess
+        ? Ok(authResult.Value)
+        : Problem(
+            statusCode: StatusCodes.Status400BadRequest, 
+            title: authResult.Error.Code, 
+            detail: authResult.Error.Description);
+}
+```
+
+This implementation, while functional, led to inconsistent error response formats between validation errors and business logic errors.
+
+## Response Analysis
+
+### Validation Errors
+When FluentValidation catches an invalid request (e.g., empty email), it produces the following response:
+
+```json
+{
+    "type": "https://tools.ietf.org/html/rfc9110#section-15.5.1",
+    "title": "One or more validation errors occurred",
+    "status": 400,
+    "errors": {
+        "Email": [
+            "'Email' must not be empty.",
+            "'Email' is not a valid email address"
+        ]
+    },
+    "traceId": "00-1b9ef6aed4b6caabd5a5991b777d36cdb-361cdc5b0f0447c-00"
+}
+```
+
+### Business Logic Errors
+When our service returns an error (e.g., wrong password), it produces a different format:
+
+```json
+{
+    "type": "https://tools.ietf.org/html/rfc9110#section-15.5.1",
+    "title": "User.InvalidCredentials",
+    "status": 400,
+    "detail": "Invalid email or password",
+    "traceId": "00-c7138196f44258e67bbebb0fbdf95255-ad6cf895676a87bf-00"
+}
+```
+
+## Problem Detection
+
+We identified several inconsistencies in our error responses:
+
+| Aspect | Validation Errors | Business Logic Errors |
+|--------|------------------|---------------------|
+| Error Location | Under `errors` object | Under `detail` field |
+| Title Format | Generic message | Error code |
+| Error Structure | Grouped by field | Single message |
+
+These inconsistencies make it harder for API consumers to handle errors uniformly.
+
+## Standardization Solution
+
+To achieve consistency, we leveraged ASP.NET Core's Problem Details feature, specifically its `extensions` dictionary. This allows us to:
+
+1. Use a consistent "Bad Request" title
+2. Move all error details to an `errors` array
+3. Maintain RFC 7807 compliance
+4. Provide structured error information
+
+## Implementation Details
+
+Here's our improved implementation:
+
+```csharp
+[HttpPost("")]
+public async Task<IActionResult> LoginAsync(
+    [FromBody] LoginRequest request,
+    CancellationToken cancellationToken)
+{
+    var authResult = await _authService.GetTokenAsync(
+        request.Email, 
+        request.Password, 
+        cancellationToken);
+ 
+    return authResult.IsSuccess
+        ? Ok(authResult.Value)
+        : Problem(
+            statusCode: StatusCodes.Status400BadRequest,
+            title: "Bad Request",
+            extensions: new Dictionary<string, object?>
+            {
+                {
+                    "errors", new [] { authResult.Error }
+                }
+            });
+}
+```
+
+This produces a standardized error response:
+
+```json
+{
+    "type": "https://tools.ietf.org/html/rfc9110#section-15.5.1",
+    "title": "Bad Request",
+    "status": 400,
+    "traceId": "00-e811691e66e2a8d0a02e710100b238b0-04e9ef4a388dd5c4-00",
+    "errors": [
+        {
+            "code": "User.InvalidCredentials",
+            "description": "Invalid email or password"
+        }
+    ]
+}
+```
+
+### Key Benefits
+
+1. **Consistency**: All error responses now follow the same structure
+2. **Extensibility**: The `errors` array can accommodate multiple errors
+3. **Clarity**: Clear separation between validation and business logic errors
+4. **Standards Compliance**: Maintains RFC 7807 compliance while adding custom extensions
+
+### Future Considerations
+
+1. Consider implementing a custom middleware to transform FluentValidation errors into this format
+2. Add support for error severity levels
+3. Include more detailed error codes for better error handling on the client side
+4. Consider adding error documentation links in the response
+
+## Contributing
+
+Feel free to submit issues and enhancement requests to help us improve our API error handling standards.
+
+---
+
+*Last Updated: December 2024*
