@@ -770,3 +770,205 @@ This produces a response where the `errors` property contains an array of error 
 | Dictionary Structure | Easy to add multiple custom properties |
 
 
+
+
+
+# Refactoring API Error Handling with Result Extensions
+
+## Table of Contents
+- [Overview](#overview)
+- [Initial Problem](#initial-problem)
+- [Solution Evolution](#solution-evolution)
+  - [First Implementation](#first-implementation)
+  - [Enhanced Implementation](#enhanced-implementation)
+- [Code Analysis](#code-analysis)
+- [Final Implementation](#final-implementation)
+
+## Overview
+
+After implementing our basic error handling, we identified a potential maintenance issue with code duplication across controllers. This documentation covers our journey in refactoring the error handling code into a reusable extension method.
+
+## Initial Problem
+
+Our original controller code required repetitive problem details configuration:
+
+```csharp
+return Problem(
+    statusCode: StatusCodes.Status400BadRequest,
+    title: "Bad Request",
+    extensions: new Dictionary<string, object?>
+    {
+        {
+            "errors", new [] { authResult.Error }
+        }
+    });
+```
+
+This approach would lead to:
+- Code duplication across controllers
+- Inconsistent error response structure
+- Maintenance challenges
+- Potential missing RFC links
+
+## Solution Evolution
+
+### First Implementation
+
+We created a `ResultExtensions` class to encapsulate the error response logic:
+
+```csharp
+public static class ResultExtensions
+{
+    public static ObjectResult ToProblem(
+        this Result result,
+        int statusCode,
+        string title)
+    {
+        if (result.IsSuccess)
+        {
+            throw new InvalidOperationException(
+                "Cannot convert success result to a problem");
+        }
+
+        var problemDetails = new ProblemDetails
+        {
+            Type = "",
+            Status = statusCode,
+            Title = title,
+            Extensions = new Dictionary<string, object?>
+            {
+                {
+                    "errors", new [] { result.Error }
+                }
+            }
+        };
+
+        return new ObjectResult(problemDetails);
+    }
+}
+```
+
+This allowed us to simplify the controller code to:
+
+```csharp
+return authResult.IsSuccess
+    ? Ok(authResult.Value)
+    : authResult.ToProblem(
+        StatusCodes.Status400BadRequest,
+        "Bad Request");
+```
+
+However, this implementation still had issues:
+1. Missing RFC link in the Type property
+2. Manual title specification
+3. Redundant parameter passing
+
+### Enhanced Implementation
+
+We discovered that .NET 6's `Results.Problem()` already provides much of what we need:
+
+```csharp
+public static class ResultExtensions
+{
+    public static ObjectResult ToProblem(
+        this Result result,
+        int statusCode)
+    {
+        if (result.IsSuccess)
+        {
+            throw new InvalidOperationException(
+                "Cannot convert success result to a problem");
+        }
+
+        var problem = Results.Problem(statusCode: statusCode);
+        var problemDetails = problem.GetType()
+            .GetProperty(nameof(ProblemDetails))!
+            .GetValue(problem) as ProblemDetails;
+
+        problemDetails!.Extensions = new Dictionary<string, object?>
+        {
+            {
+                "errors", new [] { result.Error }
+            }
+        };
+
+        return new ObjectResult(problemDetails);
+    }
+}
+```
+
+#### Behind the Scenes: Reflection Usage
+The enhanced implementation uses reflection to access the ProblemDetails:
+```csharp
+var problemDetails = problem.GetType()
+    .GetProperty(nameof(ProblemDetails))!
+    .GetValue(problem) as ProblemDetails;
+```
+
+This approach:
+1. Gets the runtime type of the problem object
+2. Retrieves the ProblemDetails property
+3. Extracts the value and casts it to ProblemDetails
+4. Allows us to modify the extensions dictionary
+
+## Final Implementation
+
+### Controller Code
+The controller code becomes much cleaner:
+
+```csharp
+public async Task<IActionResult> LoginAsync(
+    [FromBody] LoginRequest request,
+    CancellationToken cancellationToken)
+{
+    var authResult = await _authService.GetTokenAsync(
+        request.Email,
+        request.Password,
+        cancellationToken);
+
+    return authResult.IsSuccess
+        ? Ok(authResult.Value)
+        : authResult.ToProblem(StatusCodes.Status400BadRequest);
+}
+```
+
+### Response Structure
+The final response maintains consistency with RFC standards:
+
+```json
+{
+    "type": "https://tools.ietf.org/html/rfc9110#section-15.5.1",
+    "title": "Bad Request",
+    "status": 400,
+    "errors": [
+        {
+            "code": "User.InvalidCredentials",
+            "description": "Invalid email or password"
+        }
+    ]
+}
+```
+
+## Benefits of Final Implementation
+
+| Feature | Benefit |
+|---------|---------|
+| Automatic RFC Link | Proper standard compliance |
+| Built-in Title | Consistent error messages |
+| Single Parameter | Simplified method signature |
+| Reflection Usage | Leverages built-in functionality |
+| Extension Method | Clean, reusable code |
+
+## Conclusion
+
+This refactoring journey led us to a solution that:
+1. Reduces code duplication
+2. Maintains RFC compliance
+3. Provides consistent error responses
+4. Simplifies controller code
+5. Leverages built-in ASP.NET Core functionality
+
+The final implementation strikes a balance between functionality, maintainability, and standard compliance while reducing the complexity of error handling across the application.
+
+---
+*Last Updated: December 2024*
