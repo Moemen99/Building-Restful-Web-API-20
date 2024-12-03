@@ -669,4 +669,104 @@ Feel free to submit issues and enhancement requests to help us improve our API e
 
 ---
 
-*Last Updated: December 2024*
+
+## Implementation Details
+
+### Understanding the Extensions Dictionary
+
+The ASP.NET Core Problem Details implementation provides an `extensions` dictionary that allows adding custom properties to the response. The dictionary is defined as:
+
+```csharp
+Dictionary<string, object?>
+```
+
+This structure allows us to:
+- Use string keys for custom property names
+- Store any object type as values (including arrays and complex objects)
+- Add null values when needed
+
+In our case, we utilize this flexibility to create an `errors` array that contains error objects:
+
+```csharp
+new Dictionary<string, object?>
+{
+    {
+        "errors",        // Key: string
+        new [] {         // Value: array of error objects
+            authResult.Error  // Each error object has code and description
+        }
+    }
+}
+```
+
+The error object structure:
+```csharp
+public class Error
+{
+    public string Code { get; set; }
+    public string Description { get; set; }
+}
+```
+
+### Implementation Example
+
+```csharp
+[HttpPost("")]
+public async Task<IActionResult> LoginAsync(
+    [FromBody] LoginRequest request,
+    CancellationToken cancellationToken)
+{
+    var authResult = await _authService.GetTokenAsync(
+        request.Email, 
+        request.Password, 
+        cancellationToken);
+ 
+    return authResult.IsSuccess
+        ? Ok(authResult.Value)
+        : Problem(
+            statusCode: StatusCodes.Status400BadRequest,
+            title: "Bad Request",
+            extensions: new Dictionary<string, object?>
+            {
+                {
+                    "errors", new [] { authResult.Error }  // Array of error objects
+                }
+            });
+}
+```
+
+This produces a response where the `errors` property contains an array of error objects:
+
+```json
+{
+    "type": "https://tools.ietf.org/html/rfc9110#section-15.5.1",
+    "title": "Bad Request",
+    "status": 400,
+    "traceId": "00-e811691e66e2a8d0a02e710100b238b0-04e9ef4a388dd5c4-00",
+    "errors": [              // Custom property added via extensions
+        {
+            "code": "User.InvalidCredentials",
+            "description": "Invalid email or password"
+        }
+        // Can contain multiple error objects if needed
+    ]
+}
+```
+
+### Why Use Extensions?
+
+1. **Standard Compliance**: The Problem Details RFC (7807) specifies that implementations should be extensible
+2. **Flexibility**: The dictionary structure allows adding any custom properties we need
+3. **Type Safety**: The object type allows storing complex structures while maintaining type information
+4. **Consistency**: We can maintain the same error structure across different types of errors
+
+### Extension Dictionary Benefits
+
+| Feature | Benefit |
+|---------|---------|
+| String Keys | Allows custom naming of properties |
+| Object Values | Supports complex data structures |
+| Nullable | Handles optional properties gracefully |
+| Dictionary Structure | Easy to add multiple custom properties |
+
+
